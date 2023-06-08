@@ -1,15 +1,51 @@
+#Andres Felipe Avendaño Guerra
+#Jorge Andres Roncancio Devia
+#Recepcion raspberry
+
+import paho.mqtt.client as mqtt
 import redis 
 import time
-import serial
 import math
+
+datos = []
+
+# Callback que se ejecuta cuando se establece la conexión con el broker MQTT
+def on_connect(client, userdata, flags, rc):
+    print("Conectado al broker MQTT")
+    client.subscribe("MQTT_TOPIC")  # Suscribirse al topic MQTT 
+
+# Callback que se ejecuta cuando se recibe un mensaje MQTT
+def on_message(client, userdata, msg):
+    n = 0
+    print("Mensaje recibido en el topic: " + msg.topic)
+    recibido = msg.payload.decode()
+    if(recibido[0]=='@'):
+      for char in recibido[1:0]:
+            if(char != '#'):
+                dato = dato+char
+            else:
+                datos.append(dato)
+                dato = ""
+
+        
+    print("Contenido del mensaje: " + msg.payload.decode())
+
+# Configuración del cliente MQTT
+client = mqtt.Client()
+client.on_connect = on_connect
+client.on_message = on_message
+
+# Conexión al broker MQTT
+broker_address = "0.0.0.0"
+broker_port = 1883
+client.connect(broker_address, broker_port, 60)
+
+
  
 r = redis.Redis(
     host ='redis-15016.c11.us-east-1-3.ec2.cloud.redislabs.com',
     port=15016,
     password='qZzkPmd0iNR7mkOxasJbAX21thsDe7RE')
-
-ser = serial.Serial("COM5", 115200)
-data = ser.readline().decode('utf-8')
  
 ts = r.ts()
 #ts.create("co2")
@@ -20,11 +56,16 @@ ts = r.ts()
 #xts.create("aceton")
 
 
-for i in range(1000):
-    ts.add("co2", "*",df1[i])
-    ts.add("co", "*", df2[i])
-    ts.add("alcohol", "*",df3[i])
-    ts.add("toluen", "*",df4[i])
-    ts.add("NH4", "*",df5[i])
-    ts.add("aceton", "*",df6[i])
+for i in range(6):
+    ts.add("co2", "*", datos[0])
+    ts.add("co", "*", datos[1])
+    ts.add("alcohol", "*", datos[2])
+    ts.add("toluen", "*", datos[3])
+    ts.add("NH4", "*", datos[4])
+    ts.add("aceton", "*", datos[5])
     time.sleep(1)
+
+
+
+# Loop principal del cliente MQTT
+client.loop_forever()
