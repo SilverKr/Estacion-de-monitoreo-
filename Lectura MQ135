@@ -1,6 +1,7 @@
 #include <MQUnifiedsensor.h>
+#include <WiFi.h>
 
-//Definitions
+
 #define placa "ESP-32"
 #define Voltage_Resolution 3.3
 #define pin 13 // Entrada analoga para el sensor
@@ -12,18 +13,37 @@
 // Declaración del sensor
 MQUnifiedsensor MQ135(placa, Voltage_Resolution, ADC_Bit_Resolution, pin, type);
 
+String medidas = ""; //Constante que guarda las mediciones
 
-String medidas = "";
+
+//----------------------------- Configuración Wifi / MQTT --------------------------
+
+const char* ssid = "FAMIRONDE";
+const char* password = "Contig8mas";
+const char* mqttBroker = "MQTT_BROKER_IP";
+const int mqttPort = 8883;
+const char* mqttTopic = "ATM";
+const char* clientName = "CLIENT_NAME";     
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 
 void setup() {
 
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.println("Conectando WiFi...");
+  }
+
+  mqttClient.setServer(mqttBroker, mqttPort);
+  mqttClient.setCallback(callback);
+
+  reconnect();
+
   Serial.begin(115200);
-
-  //------------------------------------------------------------
-  //------------------ Inicio Bluetooth ------------------------
-
-
 
 
   //Modelo matematico para calcular la concentración de PPM  
@@ -32,23 +52,34 @@ void setup() {
   MQ135.init(); 
 
   //------------ Proceso de calibración ----------------------------
-  //Serial.print("Calibrating please wait.");
+
   float calcR0 = 0;
   for(int i = 1; i<=10; i ++)
   {
-    MQ135.update(); // Update data, the arduino will read the voltage from the analog pin
+    MQ135.update(); 
     calcR0 += MQ135.calibrate(RatioMQ135CleanAir);
     Serial.print(".");
   }
   MQ135.setR0(calcR0/10);
   
-  
-  /**********  Calibración ***************/ 
-  //Serial.println("* Values from MQ-135 ***");
-  //Serial.println("|    CO   |  Alcohol |   CO2  |  Toluen  |  NH4  |  Aceton  |");  
+
 }
 
 void loop() {
+
+  //------------------------- Captura de datos MQ135 ------------------------------------
+
+  /*
+    Parametros de regresión exponencial según gas:
+  GAS      | a      | b
+  CO       | 605.18 | -3.937  
+  Alcohol  | 77.255 | -3.18 
+  CO2      | 110.47 | -2.862
+  Toluen  | 44.947 | -3.445
+  NH4      | 102.2  | -2.473
+  Aceton  | 34.668 | -3.369
+  */
+
   MQ135.update(); 
   MQ135.setA(605.18); MQ135.setB(-3.937); // Concentración de CO
   float CO = MQ135.readSensor(); 
@@ -58,7 +89,8 @@ void loop() {
   float Alcohol = MQ135.readSensor(); 
   medidas += String(Alcohol, 2)+"#"; 
   MQ135.setA(110.47); MQ135.setB(-2.862); // Concentración de CO2
-  float CO2 = MQ135.readSensor(); 
+  float CO2 = MQ135.readSensor();
+  // A CO2 se le agrega 400 ya que este es el promedio constante de ppm de CO2 en el aire 
   medidas += String(CO2+400, 2)+"#"; 
   MQ135.setA(44.947); MQ135.setB(-3.445); // Concentración de Toluen
   float Toluen = MQ135.readSensor(); 
@@ -69,35 +101,50 @@ void loop() {
   MQ135.setA(34.668); MQ135.setB(-3.369); // Concentración de Aceton
   float Aceton = MQ135.readSensor(); 
   medidas += String(Aceton, 2)+"#";
-  Serial.println(medidas);
-  
 
-  //Serial.print("|   "); Serial.print(CO); 
-  //Serial.print("   |   "); Serial.print(Alcohol);
-  // Note: 400 Offset for CO2 source: https://github.com/miguel5612/MQSensorsLib/issues/29
-  /*
-  Motivation:
-  We have added 400 PPM because when the library is calibrated it assumes the current state of the
-  air as 0 PPM, and it is considered today that the CO2 present in the atmosphere is around 400 PPM.
-  https://www.lavanguardia.com/natural/20190514/462242832581/concentracion-dioxido-cabono-co2-atmosfera-bate-record-historia-humanidad.html
-  */
-  /*
-  Serial.print("   |   "); Serial.print(CO2 + 400); 
-  Serial.print("   |   "); Serial.print(Toluen); 
-  Serial.print("   |   "); Serial.print(NH4); 
-  Serial.print("   |   "); Serial.print(Aceton);
-  Serial.println("   |"); 
-  
-  /*
-    Exponential regression:
-  GAS      | a      | b
-  CO       | 605.18 | -3.937  
-  Alcohol  | 77.255 | -3.18 
-  CO2      | 110.47 | -2.862
-  Toluen  | 44.947 | -3.445
-  NH4      | 102.2  | -2.473
-  Aceton  | 34.668 | -3.369
-  */
-  delay(1000); //Sampling frequency
+  // ----------------------------- Publicación MQTT ------------------------------
+
+  if (!mqttClient.connected()) {
+    reconectar();
+  }
+  mqttClient.loop();
+
+  // Enviar mensaje cada 5 segundos
+  static unsigned long previousMillis = 0;
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= 5000) {
+    previousMillis = currentMillis;
+    String message = medidas;
+    mqttClient.publish(mqttTopic, message.c_str());
+    Serial.println("Datos publicados");
+  }
+
   medidas = "";
+}
+
+
+void reconectar() {
+  while (!mqttClient.connected()) {
+    Serial.print("Conectando a MQTT broker...");
+    if (mqttClient.connect(clientName)) {
+      Serial.println("conectado");
+      mqttClient.subscribe(mqttTopic);
+    } else {
+      Serial.print("falló, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println("intentando de nuevo en 5 segundos");
+      delay(5000);
+    }
+  }
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Mensaje recibido en el topic: ");
+  Serial.println(topic);
+  Serial.print("Contenido del mensaje: ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
 }
