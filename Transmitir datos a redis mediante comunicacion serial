@@ -1,0 +1,30 @@
+import redis 
+import time
+import serial
+import math
+ 
+r = redis.Redis(
+    host ='redis-15016.c11.us-east-1-3.ec2.cloud.redislabs.com',
+    port=15016,
+    password='qZzkPmd0iNR7mkOxasJbAX21thsDe7RE')
+
+ser = serial.Serial("COM5", 115200)
+data = ser.readline().decode('utf-8')
+ 
+ts = r.ts()
+#ts.create("co2")
+#ts.create("co")
+#ts.create("alcohol")
+#ts.create("toluen")
+#ts.create("NH4")
+#xts.create("aceton")
+
+
+for i in range(1000):
+    ts.add("co2", "*",df1[i])
+    ts.add("co", "*", df2[i])
+    ts.add("alcohol", "*",df3[i])
+    ts.add("toluen", "*",df4[i])
+    ts.add("NH4", "*",df5[i])
+    ts.add("aceton", "*",df6[i])
+    time.sleep(1)
